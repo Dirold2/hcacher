@@ -1,0 +1,66 @@
+{
+  "name": "hcacher",
+  "version": "0.1.0",
+  "private": false,
+  "description": "In-memory cache manager with TTL, LRU eviction, and event bus",
+  "keywords": [
+    "cache",
+    "deduplication",
+    "events",
+    "in-memory",
+    "lru",
+    "ttl",
+    "typescript"
+  ],
+  "homepage": "https://github.com/dirold2/hcacher#readme",
+  "bugs": {
+    "url": "https://github.com/dirold2/hcacher/issues"
+  },
+  "license": "MIT",
+  "author": "dirold2",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dirold2/hcacher.git"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "dist/index.js",
+  "module": "index.ts",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc && esbuild 'dist/**/*.js' --outdir=dist --allow-overwrite --minify --sourcemap && d-build",
+    "dist": "d-dist",
+    "deploy": "npm run build && npm run dist",
+    "publish": "d-publish",
+    "typecheck:examples": "tsc -p tsconfig.examples.json",
+    "prepublish": "npm run build",
+    "lint": "oxlint src",
+    "lint:fix": "oxlint src --fix",
+    "format": "oxlint --fix . && oxfmt ."
+  },
+  "devDependencies": {
+    "@dirold2/dev-tools": "^1.1.0",
+    "@types/node": "^26.0.1",
+    "chalk": "^5.6.2",
+    "dotenv-cli": "^11.0.0",
+    "esbuild": "^0.28.1",
+    "oxfmt": "^0.57.0",
+    "oxlint": "^1.72.0",
+    "typescript": "^6.0.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

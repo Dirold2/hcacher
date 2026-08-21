@@ -1,16 +1,18 @@
-export class MiniEmitter<Events extends Record<string, any[]>> {
-  private readonly listeners = new Map<keyof Events, Function[]>();
+type EventListener<Args extends readonly unknown[]> = (...args: Args) => void;
 
-  on<K extends keyof Events>(event: K, listener: (...args: Events[K]) => void): this {
+export class MiniEmitter<Events extends { [K in keyof Events]: readonly unknown[] }> {
+  private readonly listeners = new Map<keyof Events, EventListener<Events[keyof Events]>[]>();
+
+  on<K extends keyof Events>(event: K, listener: EventListener<Events[K]>): this {
     if (!this.listeners.has(event)) this.listeners.set(event, []);
-    this.listeners.get(event)!.push(listener);
+    this.listeners.get(event)!.push(listener as EventListener<Events[keyof Events]>);
     return this;
   }
 
-  off<K extends keyof Events>(event: K, listener: (...args: Events[K]) => void): this {
+  off<K extends keyof Events>(event: K, listener: EventListener<Events[K]>): this {
     const list = this.listeners.get(event);
     if (list) {
-      const index = list.indexOf(listener);
+      const index = list.indexOf(listener as EventListener<Events[keyof Events]>);
       if (index !== -1) list.splice(index, 1);
     }
     return this;

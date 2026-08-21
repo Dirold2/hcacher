@@ -1,6 +1,6 @@
 {
   "name": "hcacher",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": false,
   "description": "In-memory cache manager with TTL, LRU eviction, and event bus",
   "keywords": [
@@ -24,12 +24,13 @@
   },
   "files": [
     "dist",
+    "CHANGELOG.md",
     "!dist/**/*.map"
   ],
   "type": "module",
   "sideEffects": false,
   "main": "dist/index.js",
-  "module": "index.ts",
+  "module": "./dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
@@ -44,21 +45,20 @@
     "dist": "d-dist",
     "deploy": "npm run build && npm run dist",
     "publish": "d-publish",
-    "typecheck:examples": "tsc -p tsconfig.examples.json",
     "prepublish": "npm run build",
     "lint": "oxlint src",
     "lint:fix": "oxlint src --fix",
     "format": "oxlint --fix . && oxfmt ."
   },
   "devDependencies": {
-    "@dirold2/dev-tools": "^1.1.0",
-    "@types/node": "^26.0.1",
-    "chalk": "^5.6.2",
+    "@dirold2/dev-tools": "^1.1.2",
+    "@types/node": "^26.2.0",
+    "chalk": "^6.0.0",
     "dotenv-cli": "^11.0.0",
-    "esbuild": "^0.28.1",
-    "oxfmt": "^0.57.0",
-    "oxlint": "^1.72.0",
-    "typescript": "^6.0.3"
+    "esbuild": "^0.28.2",
+    "oxfmt": "^0.64.0",
+    "oxlint": "^1.79.0",
+    "typescript": "^7.0.2"
   },
   "engines": {
     "node": ">=18"

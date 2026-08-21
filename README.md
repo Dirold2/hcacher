@@ -35,12 +35,12 @@ cache.on("expire", (key, data) => console.log(`Expired: ${key}`));
 
 ### `new CacheManager<T>(options?)`
 
-| Option       | Default | Description                           |
-| ------------ | ------- | ------------------------------------- |
-| `maxSize`    | `1000`  | Maximum number of entries             |
-| `ttl`        | `60000` | Time-to-live in milliseconds          |
-| `touchOnGet` | `true`  | Update access order on read (for LRU) |
-| `enabled`    | `true`  | Enable/disable the cache              |
+| Option       | Default | Description                                  |
+| ------------ | ------- | -------------------------------------------- |
+| `maxSize`    | `1000`  | Positive integer maximum number of entries   |
+| `ttl`        | `60000` | Non-negative time-to-live in milliseconds    |
+| `touchOnGet` | `true`  | Update access order on read (for LRU)        |
+| `enabled`    | `true`  | Enable/disable the cache                     |
 
 ```ts
 // Positional args also supported
@@ -55,9 +55,10 @@ new CacheManager<string>(100, 30000, true, true);
 - **`getOrSet(key, factory, meta?)`** — Get or create via factory.
   Deduplicates concurrent calls for the same key.
 - **`has(key)`** — Check if key exists and is not expired.
-- **`delete(key)`** — Remove entry (also cleans up pending factory calls).
-- **`clear()`** — Remove all entries and pending requests.
-- **`size`** — Current number of entries.
+- **`delete(key)`** — Remove an entry and invalidate its pending factory.
+- **`clear()`** — Remove all entries and invalidate all pending factories.
+- **`prune()`** — Remove expired entries and return their count.
+- **`size`** — Current number of non-expired entries.
 
 ### Events
 

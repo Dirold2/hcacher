@@ -1,11 +1,26 @@
 # hcacher
 
-Flexible in-memory cache manager with TTL, LRU eviction, and event bus.
+Flexible in-memory cache manager with optional TTL, FIFO or strict-LRU eviction, and an event bus.
+
+> English | [Русский](https://github.com/dirold2/hcacher/tree/main/lang/ru)
+
+[![npm version](https://img.shields.io/npm/v/hcacher)](https://www.npmjs.com/package/hcacher)
+[![npm downloads](https://img.shields.io/npm/dm/hcacher)](https://www.npmjs.com/package/hcacher)
+[![license](https://img.shields.io/npm/l/hcacher)](./LICENSE)
+[![typescript](https://img.shields.io/badge/TypeScript-strict-blue)](https://www.typescriptlang.org/)
 
 ## Install
 
 ```sh
 npm install hcacher
+```
+
+```sh
+pnpm install hcacher
+```
+
+```sh
+bun install hcacher
 ```
 
 ## Usage
@@ -35,17 +50,32 @@ cache.on("expire", (key, data) => console.log(`Expired: ${key}`));
 
 ### `new CacheManager<T>(options?)`
 
-| Option       | Default | Description                                  |
-| ------------ | ------- | -------------------------------------------- |
-| `maxSize`    | `1000`  | Positive integer maximum number of entries   |
-| `ttl`        | `60000` | Non-negative time-to-live in milliseconds    |
-| `touchOnGet` | `true`  | Update access order on read (for LRU)        |
-| `enabled`    | `true`  | Enable/disable the cache                     |
+| Option       | Default    | Description                                                           |
+| ------------ | ---------- | --------------------------------------------------------------------- |
+| `maxSize`    | `Infinity` | Positive safe-integer maximum entries; `Infinity` disables eviction   |
+| `ttl`        | `Infinity` | Non-negative lifetime in milliseconds; `Infinity` disables expiration |
+| `touchOnGet` | `false`    | Enables strict LRU; otherwise a bounded cache uses FIFO eviction      |
+| `enabled`    | `true`     | Enables or disables caching                                           |
 
 ```ts
-// Positional args also supported
-new CacheManager<string>(100, 30000, true, true);
+// Defaults: unbounded cache, no expiration.
+new CacheManager<string>();
+
+// Bounded caches use FIFO by default: reads and overwrites preserve insertion order.
+new CacheManager<string>({ maxSize: 100, ttl: 30_000 });
+
+// Opt in to strict LRU: reads and overwrites move an entry to the newest position.
+new CacheManager<string>({ maxSize: 100, ttl: 30_000, touchOnGet: true });
+
+// Positional arguments are also supported.
+new CacheManager<string>(100, 30_000, true, true);
 ```
+
+### Eviction behavior
+
+- With `maxSize: Infinity` (the default), no entries are evicted for capacity.
+- With finite `maxSize` and `touchOnGet: false` (the default), the oldest inserted entry is evicted first (FIFO). Reading or overwriting an existing entry does not change its position.
+- With finite `maxSize` and `touchOnGet: true`, the least recently used entry is evicted first (strict LRU). Reading or overwriting an existing entry moves it to the newest position.
 
 ### Methods
 
@@ -62,13 +92,13 @@ new CacheManager<string>(100, 30000, true, true);
 
 ### Events
 
-| Event    | Payload       | Description         |
-| -------- | ------------- | ------------------- |
-| `hit`    | `(key, data)` | Cache hit           |
-| `miss`   | `(key)`       | Cache miss          |
-| `set`    | `(key, data)` | Entry stored        |
-| `evict`  | `(key, data)` | Entry evicted (LRU) |
-| `expire` | `(key, data)` | Entry expired (TTL) |
+| Event    | Payload       | Description                                     |
+| -------- | ------------- | ----------------------------------------------- |
+| `hit`    | `(key, data)` | Cache hit                                       |
+| `miss`   | `(key)`       | Cache miss                                      |
+| `set`    | `(key, data)` | Entry stored                                    |
+| `evict`  | `(key, data)` | Entry evicted because the bounded cache is full |
+| `expire` | `(key, data)` | Entry expired (TTL)                             |
 
 ## License
 

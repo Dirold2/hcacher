@@ -1,31 +1,125 @@
+import { MiniEmitter, type EventListener } from "hemmiter";
 import type { CacheEntry, CacheManagerOptions, InternalEntry } from "./interface/index.js";
-import { MiniEmitter } from "./miniEmitter.js";
 import type { CacheEvents } from "./types/index.js";
 
+/**
+ * @ru Ожидающий результат фабрики для ключа.
+ * @en Pending factory result for a cache key.
+ *
+ * @typeParam T - The type of the cached value.
+ */
 interface PendingRequest<T> {
+  /**
+   * @ru Обещание результата фабрики.
+   * @en Promise returned by the factory.
+   */
   promise: Promise<T>;
+}
+
+/**
+ * @ru Внутренняя запись кэша, связанная с двусвязным списком.
+ * @en Internal cache entry linked into a doubly linked list.
+ *
+ * @typeParam T - The type of the cached value.
+ */
+interface LruEntry<T> extends InternalEntry<T> {
+  /**
+   * @ru Ключ записи.
+   * @en Entry key.
+   */
+  key: string;
+  /**
+   * @ru Следующая запись в списке.
+   * @en Next entry in the list.
+   */
+  next: LruEntry<T> | undefined;
+  /**
+   * @ru Предыдущая запись в списке.
+   * @en Previous entry in the list.
+   */
+  previous: LruEntry<T> | undefined;
 }
 
 /**
  * @ru Менеджер кэша с поддержкой TTL, LRU-эвикции и событийной шины.
  * @en Cache manager with TTL, LRU eviction and event bus support.
+ *
+ * @typeParam T - The type of values stored in the cache.
  */
 export class CacheManager<T = unknown> extends MiniEmitter<CacheEvents<T>> {
-  private readonly storage = new Map<string, InternalEntry<T>>();
+  private readonly storage = new Map<string, LruEntry<T>>();
   private readonly pending = new Map<string, PendingRequest<T>>();
   private readonly generations = new Map<string, number>();
   private readonly maxSize: number;
   private readonly ttl: number;
   private readonly touchOnGet: boolean;
   private readonly enabled: boolean;
+  private readonly hasExpiry: boolean;
+  private readonly hasCapacityLimit: boolean;
+  private hasEventListeners = false;
+  private oldest: LruEntry<T> | undefined;
+  private newest: LruEntry<T> | undefined;
+
+  /**
+   * @ru Регистрирует обработчик события кэша.
+   * @en Registers a listener for a cache event.
+   *
+   * @param event - Event name.
+   * @param listener - Function called with the event arguments.
+   * @returns This cache manager for method chaining.
+   */
+  override on<K extends keyof CacheEvents<T>>(
+    event: K,
+    listener: EventListener<CacheEvents<T>[K]>,
+  ): this {
+    this.hasEventListeners = true;
+    return super.on(event, listener);
+  }
+
+  /**
+   * @ru Удаляет обработчик события кэша.
+   * @en Removes a listener from a cache event.
+   *
+   * @param event - Event name.
+   * @param listener - Previously registered listener.
+   * @returns This cache manager for method chaining.
+   */
+  override off<K extends keyof CacheEvents<T>>(
+    event: K,
+    listener: EventListener<CacheEvents<T>[K]>,
+  ): this {
+    const result = super.off(event, listener);
+    this.refreshEventListenerState();
+    return result;
+  }
+
+  /**
+   * @ru Удаляет все обработчики или обработчики одного события.
+   * @en Removes all listeners, optionally only for one event.
+   *
+   * @param event - Event name to clear, or all events when omitted.
+   * @returns This cache manager for method chaining.
+   */
+  override removeAllListeners<K extends keyof CacheEvents<T>>(event?: K): this {
+    const result = super.removeAllListeners(event);
+    this.refreshEventListenerState();
+    return result;
+  }
+
+  protected override emit<K extends keyof CacheEvents<T>>(
+    event: K,
+    ...args: CacheEvents<T>[K]
+  ): void {
+    if (this.hasEventListeners) super.emit(event, ...args);
+  }
 
   /**
    * @ru Создаёт новый экземпляр CacheManager.
    * @en Creates a new CacheManager instance.
-   * @param maxSize - Maximum cache size.
-   * @param ttl - Entry TTL in milliseconds.
-   * @param touchOnGet - Update order on read.
-   * @param enabled - Whether the cache is enabled.
+   * @param options - Cache configuration, or the legacy positional arguments.
+   * @param ttl - Entry TTL in milliseconds when using positional arguments.
+   * @param touchOnGet - Update order on read when using positional arguments.
+   * @param enabled - Whether the cache is enabled when using positional arguments.
    */
   constructor(options?: CacheManagerOptions);
   constructor(maxSize?: number, ttl?: number, touchOnGet?: boolean, enabled?: boolean);
@@ -42,15 +136,17 @@ export class CacheManager<T = unknown> extends MiniEmitter<CacheEvents<T>> {
         : { enabled, maxSize: maxSizeOrOptions, ttl, touchOnGet };
 
     this.enabled = options.enabled ?? true;
-    this.maxSize = options.maxSize ?? 1000;
-    this.ttl = options.ttl ?? 60000;
-    this.touchOnGet = options.touchOnGet ?? true;
+    this.maxSize = options.maxSize ?? Infinity;
+    this.ttl = options.ttl ?? Infinity;
+    this.touchOnGet = options.touchOnGet ?? false;
+    this.hasCapacityLimit = this.maxSize !== Infinity;
+    this.hasExpiry = this.ttl !== Infinity;
 
-    if (!Number.isSafeInteger(this.maxSize) || this.maxSize <= 0) {
-      throw new RangeError("maxSize must be a positive safe integer");
+    if (this.maxSize !== Infinity && (!Number.isSafeInteger(this.maxSize) || this.maxSize <= 0)) {
+      throw new RangeError("maxSize must be a positive safe integer or Infinity");
     }
-    if (!Number.isFinite(this.ttl) || this.ttl < 0) {
-      throw new RangeError("ttl must be a non-negative finite number");
+    if (this.ttl !== Infinity && (!Number.isFinite(this.ttl) || this.ttl < 0)) {
+      throw new RangeError("ttl must be a non-negative finite number or Infinity");
     }
   }
 
@@ -61,7 +157,26 @@ export class CacheManager<T = unknown> extends MiniEmitter<CacheEvents<T>> {
    * @returns Value or undefined.
    */
   get(key: string): T | undefined {
-    return this.getEntry(key)?.data;
+    if (!this.enabled) return undefined;
+
+    const item = this.storage.get(key);
+    if (!item) {
+      this.emit("miss", key);
+      return undefined;
+    }
+
+    if (this.isExpired(item)) {
+      this.expire(key, item);
+      this.emit("miss", key);
+      return undefined;
+    }
+
+    if (this.hasCapacityLimit && this.touchOnGet && this.newest !== item) {
+      this.moveToNewest(item);
+    }
+
+    this.emit("hit", key, item.entry.data);
+    return item.entry.data;
   }
 
   /**
@@ -85,9 +200,8 @@ export class CacheManager<T = unknown> extends MiniEmitter<CacheEvents<T>> {
       return undefined;
     }
 
-    if (this.touchOnGet) {
-      this.storage.delete(key);
-      this.storage.set(key, item);
+    if (this.hasCapacityLimit && this.touchOnGet && this.newest !== item) {
+      this.moveToNewest(item);
     }
 
     this.emit("hit", key, item.entry.data);
@@ -103,7 +217,7 @@ export class CacheManager<T = unknown> extends MiniEmitter<CacheEvents<T>> {
    */
   set(key: string, data: T, meta?: { etag?: string; lastModified?: string }): void {
     if (!this.enabled) return;
-    this.invalidatePending(key);
+    if (this.pending.size > 0) this.invalidatePending(key);
     this.store(key, data, meta);
   }
 
@@ -177,7 +291,13 @@ export class CacheManager<T = unknown> extends MiniEmitter<CacheEvents<T>> {
   delete(key: string): boolean {
     this.invalidatePending(key);
     if (!this.enabled) return false;
-    return this.storage.delete(key);
+
+    const item = this.storage.get(key);
+    if (!item) return false;
+
+    this.storage.delete(key);
+    if (this.hasCapacityLimit) this.unlink(item);
+    return true;
   }
 
   /**
@@ -187,6 +307,8 @@ export class CacheManager<T = unknown> extends MiniEmitter<CacheEvents<T>> {
   clear(): void {
     for (const key of this.pending.keys()) this.invalidatePending(key);
     this.storage.clear();
+    this.oldest = undefined;
+    this.newest = undefined;
   }
 
   /**
@@ -195,7 +317,7 @@ export class CacheManager<T = unknown> extends MiniEmitter<CacheEvents<T>> {
    * @returns Number of removed entries.
    */
   prune(): number {
-    if (!this.enabled) return 0;
+    if (!this.enabled || !this.hasExpiry) return 0;
 
     let removed = 0;
     for (const [key, item] of this.storage) {
@@ -217,21 +339,36 @@ export class CacheManager<T = unknown> extends MiniEmitter<CacheEvents<T>> {
   }
 
   private store(key: string, data: T, meta?: { etag?: string; lastModified?: string }): void {
-    this.prune();
-    if (this.storage.has(key)) {
-      this.storage.delete(key);
-    } else if (this.storage.size >= this.maxSize) {
-      this.evict();
+    const existing = this.storage.get(key);
+    if (existing) {
+      existing.entry = {
+        data,
+        etag: meta?.etag,
+        lastModified: meta?.lastModified,
+      };
+      if (this.hasExpiry) existing.expiresAt = Date.now() + this.ttl;
+      if (this.hasCapacityLimit && this.touchOnGet && this.newest !== existing) {
+        this.moveToNewest(existing);
+      }
+      this.emit("set", key, data);
+      return;
     }
 
-    this.storage.set(key, {
+    if (this.hasCapacityLimit && this.storage.size >= this.maxSize) this.evict();
+
+    const item: LruEntry<T> = {
+      key,
       entry: {
         data,
         etag: meta?.etag,
         lastModified: meta?.lastModified,
       },
-      expiresAt: Date.now() + this.ttl,
-    });
+      expiresAt: this.hasExpiry ? Date.now() + this.ttl : Infinity,
+      next: undefined,
+      previous: undefined,
+    };
+    this.storage.set(key, item);
+    if (this.hasCapacityLimit) this.append(item);
 
     this.emit("set", key, data);
   }
@@ -242,22 +379,73 @@ export class CacheManager<T = unknown> extends MiniEmitter<CacheEvents<T>> {
   }
 
   private isExpired(item: InternalEntry<T>): boolean {
-    return Date.now() >= item.expiresAt;
+    return this.hasExpiry && Date.now() >= item.expiresAt;
   }
 
-  private expire(key: string, item: InternalEntry<T>): void {
+  private expire(key: string, item: LruEntry<T>): void {
     this.storage.delete(key);
+    if (this.hasCapacityLimit) this.unlink(item);
     this.emit("expire", key, item.entry.data);
   }
 
   private evict(): void {
-    const oldestKey = this.storage.keys().next().value;
-    if (oldestKey !== undefined) {
-      const item = this.storage.get(oldestKey);
-      if (item) {
-        this.emit("evict", oldestKey, item.entry.data);
-        this.storage.delete(oldestKey);
-      }
+    const item = this.oldest;
+    if (!item) return;
+
+    if (this.listenerCount("evict") === 0) {
+      this.storage.delete(item.key);
+      this.unlink(item);
+      return;
     }
+
+    const entry = item.entry;
+    this.emit("evict", item.key, entry.data);
+    if (this.storage.get(item.key) !== item || item.entry !== entry) return;
+
+    this.storage.delete(item.key);
+    this.unlink(item);
+  }
+
+  private refreshEventListenerState(): void {
+    this.hasEventListeners =
+      this.listenerCount("hit") > 0 ||
+      this.listenerCount("miss") > 0 ||
+      this.listenerCount("set") > 0 ||
+      this.listenerCount("evict") > 0 ||
+      this.listenerCount("expire") > 0;
+  }
+
+  private append(item: LruEntry<T>): void {
+    item.previous = this.newest;
+    item.next = undefined;
+    if (this.newest) this.newest.next = item;
+    else this.oldest = item;
+    this.newest = item;
+  }
+
+  private unlink(item: LruEntry<T>): void {
+    const { previous, next } = item;
+    if (previous) previous.next = next;
+    else if (this.oldest === item) this.oldest = next;
+
+    if (next) next.previous = previous;
+    else if (this.newest === item) this.newest = previous;
+
+    item.previous = undefined;
+    item.next = undefined;
+  }
+
+  private moveToNewest(item: LruEntry<T>): void {
+    const previous = item.previous;
+    const next = item.next;
+
+    if (previous) previous.next = next;
+    else this.oldest = next;
+    if (next) next.previous = previous;
+
+    item.previous = this.newest;
+    item.next = undefined;
+    this.newest!.next = item;
+    this.newest = item;
   }
 }

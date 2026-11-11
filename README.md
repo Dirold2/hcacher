@@ -58,7 +58,7 @@ cache.on("expire", (key, data) => console.log(`Expired: ${key}`));
 | `enabled`    | `true`     | Enables or disables caching                                           |
 
 ```ts
-// Defaults: unbounded cache, no expiration.
+// Defaults: unbounded cache, no expiration. Set finite limits for long-running services.
 new CacheManager<string>();
 
 // Bounded caches use FIFO by default: reads and overwrites preserve insertion order.
@@ -76,6 +76,7 @@ new CacheManager<string>(100, 30_000, true, true);
 - With `maxSize: Infinity` (the default), no entries are evicted for capacity.
 - With finite `maxSize` and `touchOnGet: false` (the default), the oldest inserted entry is evicted first (FIFO). Reading or overwriting an existing entry does not change its position.
 - With finite `maxSize` and `touchOnGet: true`, the least recently used entry is evicted first (strict LRU). Reading or overwriting an existing entry moves it to the newest position.
+- `evict` is emitted synchronously after removal. If its listener fills the cache again, the outer insertion throws unless the listener inserted that same key. An insertion requiring another eviction inside an `evict` listener also throws. Listener exceptions propagate; changes already made are not rolled back.
 
 ### Methods
 
@@ -83,12 +84,12 @@ new CacheManager<string>(100, 30_000, true, true);
 - **`getEntry(key)`** — Get full entry with `etag`/`lastModified` metadata.
 - **`set(key, data, meta?)`** — Store value with optional `etag`/`lastModified`.
 - **`getOrSet(key, factory, meta?)`** — Get or create via factory.
-  Deduplicates concurrent calls for the same key.
+  Deduplicates concurrent calls for the same key. `set`, `delete`, and `clear` invalidate pending results but do not cancel the factory; existing callers still receive its result.
 - **`has(key)`** — Check if key exists and is not expired.
 - **`delete(key)`** — Remove an entry and invalidate its pending factory.
 - **`clear()`** — Remove all entries and invalidate all pending factories.
 - **`prune()`** — Remove expired entries and return their count.
-- **`size`** — Current number of non-expired entries.
+- **`size`** — Current number of non-expired entries. With finite TTL it scans entries in O(n), removes expired entries and synchronously emits `expire` events.
 
 ### Events
 

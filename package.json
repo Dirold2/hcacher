@@ -1,6 +1,6 @@
 {
   "name": "hcacher",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": false,
   "description": "In-memory cache manager with optional TTL, FIFO or strict-LRU eviction, and event bus",
   "keywords": [
@@ -47,24 +47,24 @@
     "deploy": "npm run build && npm run dist",
     "pub": "d-publish",
     "prepublish": "npm run build",
-    "lint": "oxlint src",
-    "lint:fix": "oxlint src --fix",
+    "lint": "oxlint src tests",
+    "lint:fix": "oxlint src tests --fix",
     "format": "oxlint --fix . && oxfmt ."
   },
   "devDependencies": {
     "@dirold2/dev-tools": "^1.1.3",
-    "@types/node": "^26.3.0",
-    "@vitest/coverage-v8": "^4.1.11",
-    "chalk": "^6.0.0",
-    "dotenv-cli": "^11.0.0",
+    "@types/node": "^26.6.6",
+    "@vitest/coverage-v8": "^4.1.12",
+    "chalk": "^6.0.1",
+    "dotenv-cli": "^11.1.0",
     "esbuild": "^0.28.2",
-    "oxfmt": "^0.65.0",
-    "oxlint": "^1.80.0",
+    "oxfmt": "^0.78.0",
+    "oxlint": "^1.93.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "peerDependencies": {
-    "hemmiter": "^0.1.0"
+    "hemmiter": "^0.1.1"
   },
   "engines": {
     "node": ">=18"

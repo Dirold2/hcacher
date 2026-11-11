@@ -49,7 +49,6 @@ interface LruEntry<T> extends InternalEntry<T> {
 export class CacheManager<T = unknown> extends MiniEmitter<CacheEvents<T>> {
   private readonly storage = new Map<string, LruEntry<T>>();
   private readonly pending = new Map<string, PendingRequest<T>>();
-  private readonly generations = new Map<string, number>();
   private readonly maxSize: number;
   private readonly ttl: number;
   private readonly touchOnGet: boolean;
@@ -57,6 +56,7 @@ export class CacheManager<T = unknown> extends MiniEmitter<CacheEvents<T>> {
   private readonly hasExpiry: boolean;
   private readonly hasCapacityLimit: boolean;
   private hasEventListeners = false;
+  private notifyingEviction = false;
   private oldest: LruEntry<T> | undefined;
   private newest: LruEntry<T> | undefined;
 
@@ -242,23 +242,23 @@ export class CacheManager<T = unknown> extends MiniEmitter<CacheEvents<T>> {
     const pending = this.pending.get(key);
     if (pending) return pending.promise;
 
-    const generation = this.generations.get(key) ?? 0;
-    let promise!: Promise<T>;
-    promise = Promise.resolve()
+    let request!: PendingRequest<T>;
+    const promise = Promise.resolve()
       .then(factory)
       .then((data) => {
-        if ((this.generations.get(key) ?? 0) === generation) {
+        if (this.pending.get(key) === request) {
           this.store(key, data, meta);
         }
         return data;
       })
       .finally(() => {
-        if (this.pending.get(key)?.promise === promise) {
+        if (this.pending.get(key) === request) {
           this.pending.delete(key);
         }
       });
 
-    this.pending.set(key, { promise });
+    request = { promise };
+    this.pending.set(key, request);
     return promise;
   }
 
@@ -354,7 +354,20 @@ export class CacheManager<T = unknown> extends MiniEmitter<CacheEvents<T>> {
       return;
     }
 
-    if (this.hasCapacityLimit && this.storage.size >= this.maxSize) this.evict();
+    if (this.hasCapacityLimit && this.storage.size >= this.maxSize) {
+      if (this.notifyingEviction) {
+        throw new Error("Cannot insert into a full cache during an eviction callback");
+      }
+      this.evict();
+      // An eviction listener may have inserted this key or filled the cache again.
+      if (this.storage.has(key)) {
+        this.store(key, data, meta);
+        return;
+      }
+      if (this.storage.size >= this.maxSize) {
+        throw new Error("Eviction callback refilled the cache");
+      }
+    }
 
     const item: LruEntry<T> = {
       key,
@@ -374,8 +387,7 @@ export class CacheManager<T = unknown> extends MiniEmitter<CacheEvents<T>> {
   }
 
   private invalidatePending(key: string): void {
-    if (!this.pending.delete(key)) return;
-    this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
+    this.pending.delete(key);
   }
 
   private isExpired(item: InternalEntry<T>): boolean {
@@ -392,18 +404,16 @@ export class CacheManager<T = unknown> extends MiniEmitter<CacheEvents<T>> {
     const item = this.oldest;
     if (!item) return;
 
-    if (this.listenerCount("evict") === 0) {
-      this.storage.delete(item.key);
-      this.unlink(item);
-      return;
-    }
-
-    const entry = item.entry;
-    this.emit("evict", item.key, entry.data);
-    if (this.storage.get(item.key) !== item || item.entry !== entry) return;
-
     this.storage.delete(item.key);
     this.unlink(item);
+    if (this.listenerCount("evict") === 0) return;
+
+    this.notifyingEviction = true;
+    try {
+      this.emit("evict", item.key, item.entry.data);
+    } finally {
+      this.notifyingEviction = false;
+    }
   }
 
   private refreshEventListenerState(): void {

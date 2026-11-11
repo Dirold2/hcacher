@@ -73,6 +73,34 @@ describe("CacheManager", () => {
     expect(cache.get("c")).toBe("3");
   });
 
+  it("keeps capacity when an eviction listener reinserts the evicted key", () => {
+    const cache = new CacheManager<number>({ maxSize: 1 });
+    cache.set("a", 1);
+    cache.on("evict", (key) => {
+      if (key === "a") cache.set("a", 2);
+    });
+    expect(() => cache.set("b", 3)).toThrow("Eviction callback refilled the cache");
+    expect(cache.size).toBe(1);
+    expect(cache.get("a")).toBe(2);
+    expect(cache.has("b")).toBe(false);
+  });
+
+  it("rejects recursive eviction without corrupting the cache", () => {
+    const cache = new CacheManager<number>({ maxSize: 1 });
+    cache.set("a", 1);
+    cache.on("evict", () => {
+      cache.set("nested", 2);
+      cache.set("recursive", 3);
+    });
+    expect(() => cache.set("b", 4)).toThrow("during an eviction callback");
+    expect(cache.size).toBe(1);
+    expect(cache.get("nested")).toBe(2);
+    cache.removeAllListeners();
+    cache.set("next", 5);
+    expect(cache.size).toBe(1);
+    expect(cache.get("next")).toBe(5);
+  });
+
   it("uses strict LRU when touchOnGet is enabled", () => {
     const cache = new CacheManager<string>({ maxSize: 2, touchOnGet: true });
     cache.set("a", "1");
@@ -142,6 +170,70 @@ describe("CacheManager", () => {
     resolveFactory("late value");
     await expect(pending).resolves.toBe("late value");
     expect(cache.get("key")).toBeUndefined();
+  });
+
+  it("keeps newer getOrSet requests after set, delete, or clear invalidation", async () => {
+    for (const invalidate of [
+      (cache: CacheManager<string>) => {
+        cache.set("key", "explicit");
+        cache.delete("key");
+      },
+      (cache: CacheManager<string>) => cache.delete("key"),
+      (cache: CacheManager<string>) => cache.clear(),
+    ]) {
+      const cache = new CacheManager<string>();
+      const resolvers: Array<(value: string) => void> = [];
+      const factory = vi.fn(
+        () =>
+          new Promise<string>((resolve) => {
+            resolvers.push(resolve);
+          }),
+      );
+
+      const first = cache.getOrSet("key", factory);
+      await Promise.resolve();
+      invalidate(cache);
+      const second = cache.getOrSet("key", factory);
+      await Promise.resolve();
+
+      resolvers[0]("stale");
+      await expect(first).resolves.toBe("stale");
+      expect(cache.get("key")).toBeUndefined();
+
+      resolvers[1]("fresh");
+      await expect(second).resolves.toBe("fresh");
+      expect(cache.get("key")).toBe("fresh");
+      expect(factory).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  it("does not retain invalidation generations after set, delete, or clear", async () => {
+    const cache = new CacheManager<string>();
+    const resolvers: Array<(value: string) => void> = [];
+    const requests: Array<Promise<string>> = [];
+
+    for (let index = 0; index < 100; index += 1) {
+      const key = `key-${index}`;
+      requests.push(
+        cache.getOrSet(
+          key,
+          () =>
+            new Promise<string>((resolve) => {
+              resolvers.push(resolve);
+            }),
+        ),
+      );
+    }
+    await Promise.resolve();
+
+    cache.set("key-0", "explicit");
+    cache.delete("key-1");
+    cache.clear();
+    for (const resolve of resolvers) resolve("late");
+    await expect(Promise.all(requests)).resolves.toHaveLength(100);
+
+    expect(cache.size).toBe(0);
+    expect(cache).not.toHaveProperty("generations");
   });
 
   it("does not store or read values when disabled", async () => {
